@@ -16,7 +16,7 @@
 #define PORT    9989
 #define BACKLOG 42
 
-static int done = 0;
+static int server_fd;
 
 /* Function prototypes. */
 void * worker_thread(void * arg_ptr);
@@ -35,14 +35,11 @@ void clean_up(){
 
 /* Signal handler. */
 void on_signal(int signal){
-  if(signal == SIGINT){
-    done = 1;
-  }else
-    return;
+  close(server_fd);
 }
 
 int main(void){
-  int                  server_fd, client_fd, tid = 1;
+  int                  client_fd, tid = 1;
   socklen_t            sin_size;
   struct sockaddr_in   server;
   struct sockaddr_in   client;
@@ -51,7 +48,7 @@ int main(void){
 
   /* Convert the process into a daemon. */
   daemonize();
-  openlog("excpetd", LOG_PID, LOG_DAEMON);
+  openlog("exceptd", LOG_PID, LOG_DAEMON);
   syslog(LOG_NOTICE, "Exception report daemon started.");
   
   /* Set up clean up method and signal handlers. */
@@ -82,14 +79,14 @@ int main(void){
     exit(EXIT_FAILURE);
   }
 
-  while(!done){
+  while(1){
     /* Wait for clients to connect. */
     sin_size = sizeof(struct sockaddr_in);
     if((client_fd = accept(server_fd, (struct sockaddr *)&client, &sin_size)) == -1){
-      syslog(LOG_ERR, "Error during accept()."); 
-      exit(EXIT_FAILURE);
+      syslog(LOG_ERR, "Error during accept() or SIGINT received."); 
+      break;
     }
-    syslog(LOG_NOTICE, "Client connected.");
+    syslog(LOG_NOTICE, "Client connected from: %s", inet_ntoa(client.sin_addr));
 
     /* Create arguments for a worker thread. */
     t_args = (struct thread_args *)malloc(sizeof(struct thread_args));
@@ -117,15 +114,59 @@ int main(void){
   }
 
   /* Cleanly finish. */
+  close(server_fd);
   syslog(LOG_NOTICE, "Exception report daemon terminated.");
 
   return EXIT_SUCCESS;
 }
 
 void * worker_thread(void *args_ptr){
+  int num_bytes;
+  char buffer[512];
   struct thread_args * args = (struct thread_args *)args_ptr;
 
-  
+  pthread_detach(pthread_self());
+
+  /* Read from the client. */
+  if((num_bytes = recv(args->client_fd, buffer, 511, 0)) == -1){
+    /* On error log, clean up and exit. */
+    if(args->client_ip != NULL){
+      syslog(LOG_ERR, "Error receiving from client at: %s", args->client_ip);
+    }else{
+      syslog(LOG_ERR, "Error receiving from client.");
+    }
+
+    close(args->client_fd);
+    if(args->client_ip != NULL)
+      free(args->client_ip);
+    free(args);
+    pthread_exit(NULL);
+  }
+
+  /* Log the client message. */
+  buffer[num_bytes] = '\0';
+
+  if(args->client_ip != NULL){
+    syslog(LOG_NOTICE, "Received the following message: %s - from client at: %s", buffer, args->client_ip);
+  }else{
+    syslog(LOG_ERR, "Received the following message: %s.", buffer);
+  }
+
+  /* Echo back to the client. */
+  if(send(args->client_fd, buffer, strlen(buffer), 0) == -1){
+    /* On error log, clean up and exit. */
+    if(args->client_ip != NULL){
+      syslog(LOG_ERR, "Error echoing to client at: %s", args->client_ip);
+    }else{
+      syslog(LOG_ERR, "Error echoing to client.");
+    }
+
+    close(args->client_fd);
+    if(args->client_ip != NULL)
+      free(args->client_ip);
+    free(args);
+    pthread_exit(NULL);
+  }
 
   /* Clean up and exit. */
   close(args->client_fd);
