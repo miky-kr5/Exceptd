@@ -2,12 +2,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
+#include <syslog.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #include "daemonize.h"
 
-void daemonize(){
+void daemonize(const char * log_name){
   pid_t pid;
 
   /* Fork off the parent process */
@@ -51,5 +52,12 @@ void daemonize(){
   int x;
   for (x = sysconf(_SC_OPEN_MAX); x>0; x--){
     close (x);
+  }
+
+  /* Set up the system log. */
+  if(log_name != NULL){
+    openlog(log_name, LOG_PID, LOG_DAEMON);
+  }else{
+    openlog("NEW_DAEMON", LOG_PID, LOG_DAEMON);
   }
 }
