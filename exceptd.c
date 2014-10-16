@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -18,9 +19,9 @@
 #define BACKLOG     42
 #define BUFFER_SIZE 8192
 
-static int     server_fd;
-static MYSQL * db_conn;
-static sem_t   db_sem;
+static int             server_fd;
+static MYSQL *         db_conn;
+static sem_t           db_sem;
 
 /* MySQL connection parameters. */
 const char * mysql_server = "localhost";
@@ -31,6 +32,7 @@ const char * query_header = "INSERT INTO exception(date, exception, message) VAL
 
 /* Function prototypes. */
 void * worker_thread(void * arg_ptr);
+void * ping_thread(void * unused);
 
 /* Argument definition for worker threads. */
 struct thread_args{
@@ -45,6 +47,7 @@ void clean_up(){
   sem_wait(&db_sem);{
     mysql_close(db_conn);
   }sem_post(&db_sem);
+  mysql_library_end();
 }
 
 /* Signal handler. */
@@ -53,12 +56,13 @@ void on_signal(int signal){
 }
 
 int main(void){
+  my_bool              reconnect = 1;
   int                  client_fd, tid = 1;
   socklen_t            sin_size;
   struct sockaddr_in   server;
   struct sockaddr_in   client;
   struct thread_args * t_args;
-  pthread_t            t;
+  pthread_t            t, ping;
 
   /* Convert the process into a daemon. */
   daemonize("exceptd");
@@ -69,7 +73,12 @@ int main(void){
   signal(SIGINT, on_signal);
 
   /* Connect to MySQL. */
+  if(mysql_library_init(0, NULL, NULL)) {
+    syslog(LOG_ERR, "could not initialize the MySQL library.");
+    exit(EXIT_FAILURE);
+  }
   db_conn = mysql_init(NULL);
+  mysql_options(db_conn, MYSQL_OPT_RECONNECT, &reconnect);
 
   if(!mysql_real_connect(db_conn, mysql_server, mysql_user, mysql_passwd, mysql_db, 0, NULL, 0)) {
     syslog(LOG_ERR, "Could not connect to MySQL: %s", mysql_error(db_conn));
@@ -103,6 +112,9 @@ int main(void){
 
   /* Initialize the database semaphore. */
   sem_init(&db_sem, 0, 1);
+
+  /* Launch the keep alive thread. */
+  pthread_create(&ping, NULL, ping_thread, NULL);
 
   while(1){
     /* Wait for clients to connect. */
@@ -140,6 +152,10 @@ int main(void){
 
   /* Cleanly finish. */
   close(server_fd);
+
+  pthread_cancel(ping);
+  pthread_join(ping, NULL);
+
   syslog(LOG_NOTICE, "Exception report daemon terminated.");
 
   return EXIT_SUCCESS;
@@ -189,7 +205,7 @@ void * worker_thread(void *args_ptr){
 
   buffer[num_bytes] = '\0';
 
-  /* TODO: Parse the received message. */
+  /* Parse the received message. */
   memset(query, '\0', (BUFFER_SIZE + 512) * sizeof(char));
 
   /* Copy the header. */
@@ -288,6 +304,35 @@ void * worker_thread(void *args_ptr){
   if(args->client_ip != NULL)
     free(args->client_ip);
   free(args);
+
+  return NULL;
+}
+
+void * ping_thread(void* unused){
+  unsigned long m_tid_before;
+  unsigned long m_tid_after;
+
+  while(1){
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+
+    /* Ping the MySQL server and log reconnections.*/
+    sem_wait(&db_sem);{
+      syslog(LOG_NOTICE, "Pinging MySQL.");
+ 
+      m_tid_before = mysql_thread_id(db_conn);
+      mysql_ping(db_conn);
+      m_tid_after = mysql_thread_id(db_conn);
+
+      if(m_tid_before != m_tid_after){
+	syslog(LOG_NOTICE, "MySQL reconnected.");
+      }
+    }sem_post(&db_sem);
+
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+
+    /* Wait 10 minutes before pinging again. */
+    sleep(600);
+  }
 
   return NULL;
 }
