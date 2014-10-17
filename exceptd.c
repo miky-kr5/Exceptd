@@ -316,9 +316,7 @@ void * ping_thread(void* unused){
     pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
     /* Ping the MySQL server and log reconnections.*/
-    sem_wait(&db_sem);{
-      syslog(LOG_NOTICE, "Pinging MySQL.");
- 
+    sem_wait(&db_sem);{ 
       m_tid_before = mysql_thread_id(db_conn);
       mysql_ping(db_conn);
       m_tid_after = mysql_thread_id(db_conn);
