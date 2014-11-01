@@ -6,14 +6,13 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <time.h>
+#include <syslog.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <syslog.h>
 #include <mysql.h>
-
-#include "daemonize.h"
 
 #define PORT        9989
 #define BACKLOG     42
@@ -65,7 +64,10 @@ int main(void){
   pthread_t            t, ping;
 
   /* Convert the process into a daemon. */
-  daemonize("exceptd");
+  daemon(1, 1);
+
+  /* Set up the system log. */
+  openlog("exceptd", LOG_PID, LOG_DAEMON);
   syslog(LOG_NOTICE, "Exception report daemon started.");
   
   /* Set up clean up method and signal handlers. */
