@@ -149,7 +149,9 @@ int main(void){
     if(t_args->client_ip != NULL){
       syslog(LOG_NOTICE, "Creating worker thread for client at: %s", t_args->client_ip);
     }
+
     pthread_create(&t, NULL, worker_thread, t_args);
+    pthread_detach(t);
   }
 
   /* Cleanly finish. */
