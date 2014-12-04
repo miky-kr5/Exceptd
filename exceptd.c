@@ -21,6 +21,7 @@
 static int             server_fd;
 static MYSQL *         db_conn;
 static sem_t           db_sem;
+static pthread_t       ping;
 
 /* MySQL connection parameters. */
 const char * mysql_server = "localhost";
@@ -51,7 +52,13 @@ void clean_up(){
 
 /* Signal handler. */
 void on_signal(int signal){
-  close(server_fd);
+  if(signal == SIGINT){
+    close(server_fd);
+    pthread_cancel(ping);
+    pthread_join(ping, NULL);
+    syslog(LOG_NOTICE, "Exception report daemon terminated.");
+    exit(0);
+  }
 }
 
 int main(void){
@@ -61,7 +68,7 @@ int main(void){
   struct sockaddr_in   server;
   struct sockaddr_in   client;
   struct thread_args * t_args;
-  pthread_t            t, ping;
+  pthread_t            t;
 
   /* Convert the process into a daemon. */
   daemon(1, 1);
@@ -151,16 +158,7 @@ int main(void){
     }
 
     pthread_create(&t, NULL, worker_thread, t_args);
-    pthread_detach(t);
   }
-
-  /* Cleanly finish. */
-  close(server_fd);
-
-  pthread_cancel(ping);
-  pthread_join(ping, NULL);
-
-  syslog(LOG_NOTICE, "Exception report daemon terminated.");
 
   return EXIT_SUCCESS;
 }
